@@ -23,6 +23,7 @@
 #define MODULE_PROP "/data/adb/modules/playintegrityfix/module.prop"
 #define DEFAULT_PIF "/data/adb/modules/playintegrityfix/pif.prop"
 #define CUSTOM_PIF "/data/adb/pif.prop"
+#define TEESIM_MODULE "/data/adb/modules/teesim"
 
 #define VENDING_PACKAGE "com.android.vending"
 #define DROIDGUARD_PACKAGE "com.google.android.gms.unstable"
@@ -101,6 +102,16 @@ void applySocketTimeout(int fd) {
 
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
     setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+}
+
+bool moduleEnabled(const char *path) {
+    if (access(path, F_OK) != 0) {
+        return false;
+    }
+
+    const std::string base(path);
+    return access((base + "/disable").c_str(), F_OK) != 0 &&
+           access((base + "/remove").c_str(), F_OK) != 0;
 }
 
 bool readFileBytes(const char *path, std::vector<uint8_t> &out) {
@@ -476,6 +487,18 @@ void companion(int fd) {
     if (ok) {
         const std::string_view propView(reinterpret_cast<const char *>(propBytes.data()), propBytes.size());
         config = pif::parseConfig(propView);
+
+        // TEESimulator owns the GMS/Play Store KeyMint/attestation path.  PIF's provider and
+        // low-level property hooks can otherwise create a second attestation identity in the same
+        // process.  Keep the Play Integrity build/profile spoofing active, but make coexistence
+        // deterministic even when an old /data/adb/pif.prop still has these two switches enabled.
+        if (moduleEnabled(TEESIM_MODULE)) {
+            if (config.spoofProvider || config.spoofProps) {
+                LOGD("[COMPANION] TEESimulator active: forcing spoofProvider=false, spoofProps=false");
+            }
+            config.spoofProvider = false;
+            config.spoofProps = false;
+        }
     }
     if (ok && config.needsDex()) {
         ok = readFileBytes(DEX_PATH, dexBytes);
